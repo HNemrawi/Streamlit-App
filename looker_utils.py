@@ -10,6 +10,11 @@ client_secret = st.secrets["Looker"]["client_secret"]
 verify_ssl = True
 
 # Initialize the Looker SDK with the configuration
-sdk = looker_sdk.init40()
+sdk = looker_sdk.init40(
+    base_url=base_url,
+    client_id=client_id,
+    client_secret=client_secret,
+    verify_ssl=verify_ssl,
+)
 
 
