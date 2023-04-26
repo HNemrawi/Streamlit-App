@@ -1,16 +1,22 @@
 import looker_sdk
-from looker_sdk import models, error
-from looker_sdk.rtl import transport
+from looker_sdk import api_settings
 import streamlit as st
-# Load the Looker SDK configuration from st.secrets
-
-base_url = st.secrets["Looker"]["base_url"]
-client_id = st.secrets["Looker"]["client_id"]
-client_secret = st.secrets["Looker"]["client_secret"]
-verify_ssl = st.secrets["Looker"]["verify_ssl"]
-
-# Initialize the Looker SDK with the configuration
-sdk = looker_sdk.init40()
 
 
+class MyApiSettings(api_settings.ApiSettings):
+    def __init__(self, *args, **kw_args):
+        self.my_var = kw_args.pop("my_var")
+        super().__init__(*args, **kw_args)
 
+    def read_config(self) -> api_settings.SettingsConfig:
+        config = super().read_config()
+        # Load the Looker SDK configuration from st.secrets
+        config["base_url"] = st.secrets["Looker"]["base_url"]
+        config["client_id"] = st.secrets["Looker"]["client_id"]
+        config["client_secret"] = st.secrets["Looker"]["client_secret"]
+        config["verify_ssl"] = st.secrets["Looker"]["verify_ssl"]
+        return config
+
+
+# Initialize the Looker SDK with the custom configuration
+sdk = looker_sdk.init40(config_settings=MyApiSettings(my_var="foo"))
