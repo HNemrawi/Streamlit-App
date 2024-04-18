@@ -119,11 +119,10 @@ def main():
             @st.cache_data
             def get_dataframes():
                 # Always retrieve and cache the latest data frames
-                return {"found_dash": found_dash, "grouped_dash": grouped_dash, "found_look": found_look}
+                return {"found_dash": found_dash, "found_look": found_look}
 
             # Get the updated data frames from the function
             found_dash = get_dataframes()["found_dash"]
-            grouped_dash = get_dataframes()["grouped_dash"]
             found_look = get_dataframes()["found_look"]
 
             # Update the completion and progress
