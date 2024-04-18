@@ -1,4 +1,3 @@
-import logging
 import streamlit as st
 from auth import show_login_page
 from helpers import *
@@ -7,41 +6,15 @@ from looker_utils import sdk
 # Set page configuration
 st.set_page_config(page_title="Dashboard Search", page_icon=":mag_right:", layout="wide")
 
-# Set logging configuration
-logging.basicConfig(
-    filename="app.log",
-    filemode="a",
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO)
-
-MAX_RECENT_INPUTS = 5
-
-
-# Function to create a download link
-def create_download_link(data, filename, mime):
-    b64 = base64.b64encode(data.encode()).decode()
-    return f'<a href="data:{mime};base64,{b64}" download="{filename}">Download {filename}</a>'
-
-
 # Functions to cache data
-@st.cache_data(ttl=None)
+@st.cache_data
 def get_all_dashboards_cached():
     return sdk.all_dashboards()
 
 
-@st.cache_data(ttl=None)
+@st.cache_data
 def get_all_looks_cached():
     return sdk.all_looks()
-
-
-# Functions to manage session state
-def get_session_state():
-    session_state = st.session_state.get('recent_inputs', [])
-    return session_state
-
-
-def set_session_state(region_inputs):
-    st.session_state['recent_inputs'] = region_inputs
 
 
 # Main function
@@ -56,38 +29,27 @@ def main():
         unsafe_allow_html=True)
     st.sidebar.title("Dashboards/Looks Search")
 
-    # Radio button for selecting implementation
-    tabs = ["New England", "Wisconsin"]
-    region = st.sidebar.radio("Select Implementation", tabs)
+    region_options = {
+        "New England": (11429, 11430),
+        "GreatLakes": (8519, 8520)
+    }
 
-    # Set folder IDs based on region
-    if region == "New England":
-        cur_folder_id = 11429
-        cur_agency_folder_id = 11430
-    elif region == "Wisconsin":
-        cur_folder_id = 8519
-        cur_agency_folder_id = 8520
+    selected_regions = st.sidebar.multiselect("Select Implementations", list(region_options.keys()), default=list(region_options.keys()))
+
+    # Aggregating folder IDs from selected regions
+    cur_folder_id = []
+    cur_agency_folder_id = []
+    for region in selected_regions:
+        cur_folder_id.append(region_options[region][0])
+        cur_agency_folder_id.append(region_options[region][1])
 
     stop_button = st.sidebar.button("Stop")
 
-    # Display recent inputs
-    st.sidebar.subheader("Recent Inputs")
-    recent_inputs = get_session_state()
-    region_inputs = [input_string for input_string, input_region in recent_inputs if input_region == region]
-    st.sidebar.write(", ".join(region_inputs))
-
-    # Input field for search string
-    input_string = st.text_input("Enter a string to search for:", "referrals.status")
-
-    input_changed = False
-    if input_string and st.button("Search"):
-        input_changed = True
-        recent_inputs.append((input_string, region))
-        if len(recent_inputs) > MAX_RECENT_INPUTS:
-            recent_inputs.pop(0)
-
-        set_session_state(recent_inputs)
-        st.sidebar.write(f"{input_string} ({region})")
+    input_string = st.text_input("Enter string(s) to search for (separate multiple with commas):", "chronic_5, education_child_school, education_child_type, education_degree, education_enrolled, education_level, employment_hours, employment_tenure, employment_status, health_mental_documented, health_mental_services, health_substance_abuse_services, housing_status, rhy_family_reunification, soar_staff, zipcode_quality")
+    targeted_strings = [s.strip() for s in input_string.split(',')]
+    st.sidebar.write ('List of Strings:')
+    st.sidebar.write (targeted_strings)
+    if targeted_strings and st.button("Search"):
 
         # Process search request
         with st.spinner("Processing..."):
@@ -98,110 +60,73 @@ def main():
             if not stop_button:
                 # Get all dashboards
                 all_dashboards = get_all_dashboards_cached()
-                completed_tasks += 1
-                progress_bar.progress(completed_tasks / total_tasks)
+
 
             if not stop_button:
                 all_dash_ind = get_indices_by_folder(sdk, all_dashboards, cur_folder_id, cur_agency_folder_id)
-                completed_tasks += 1
+                completed_tasks += 2
                 progress_bar.progress(completed_tasks / total_tasks)
-                all_dash_titles = get_titles(all_dashboards, all_dash_ind)
 
             # Loop through all possible Dashboards
             if not stop_button:
-                found_dash_list = []
+                found_dash_dict = {}
+                processed_dashboards = set()  # To prevent duplicate dashboard processing
                 for cur_dash in all_dash_ind:
                     try:
                         cur_dashboard = get_dashboards_by_id(sdk, all_dashboards[cur_dash].id)
                         dashboard_str = str(cur_dashboard)
+                        if cur_dashboard.id not in processed_dashboards and any(ts in dashboard_str for ts in targeted_strings):
+                            dashboard_info = process_dashboards(sdk,cur_dashboard, targeted_strings)
+                            found_dash_dict[str(cur_dashboard.id)] = dashboard_info
+                            processed_dashboards.add(cur_dashboard.id)
 
-                        if any(input_string in s for s in dashboard_str.split()):
-                            dashboard_info = extract_dashboard_info(cur_dashboard, input_string)
-                            found_dash_list.append(dashboard_info)
+                        if cur_dashboard.id not in processed_dashboards and any(ts in dashboard_str for ts in targeted_strings):
+                            dashboard_info = process_dashboards(sdk,cur_dashboard, targeted_strings)
                     except Exception as e:
-                        logging.error(f"Error processing dashboard {cur_dash}: {e}")
                         st.error(f"Error processing dashboard {cur_dash}: {e}")
 
-                found_dash = pd.DataFrame(found_dash_list).reset_index(drop=True)
+                found_dash = pd.DataFrame(found_dash_dict).T.reset_index(drop=True)
+                found_dash.dropna(inplace=True)
                 completed_tasks += 1
                 progress_bar.progress(completed_tasks / total_tasks)
-                st.markdown("<hr>", unsafe_allow_html=True)
-                st.subheader('List of Dashboards without merged query')
-                dashboards = found_dash.to_csv(index=False)
-                st.markdown(create_download_link(dashboards, 'dashs.csv', 'text/csv'), unsafe_allow_html=True)
+                st.title('Dashboards')
                 st.dataframe(found_dash)
-
-            # Loop through all possible Dashboards with merged query
-            if not stop_button:
-                found_dash_dict = ({})
-                data = []
-                for cur_dash in all_dash_ind:
-                    try:
-                        cur_dashboard = get_dashboards_by_id(sdk, all_dashboards[cur_dash].id)
-                        dashboard_info = process_dashboard(sdk, cur_dashboard, input_string)
-                        if dashboard_info:
-                            found_dash_dict[str(cur_dashboard.id)] = dashboard_info
-                            data.append(dashboard_info)
-                    except Exception as e:
-                        st.error(f"Error processing dashboard (merged) {cur_dash}: {e}")
-                        logging.error(f"Error processing dashboard (merged) {cur_dash}: {e}")
-
-                grouped_dash = (
-                    pd.DataFrame([(k, v.get('title', ''), v.get('dashboard_folder_id', ''), v2.get('elem_title', ''))
-                                  for k, v in found_dash_dict.items()
-                                  for k2, v2 in v.items()
-                                  if k2 not in ('title', 'dashboard_folder_id')
-                                  for mq_key, mq_value in v2.get(list(v2.keys())[1], {}).items()],
-                                 columns=['Dashboard ID', 'Title', 'Folder ID', 'Element Title'])
-                    .groupby(['Dashboard ID', 'Title', 'Folder ID'])['Element Title']
-                    .agg(', '.join)
-                    .reset_index())
-                completed_tasks += 1
-                progress_bar.progress(completed_tasks / total_tasks)
-                st.markdown("<hr>", unsafe_allow_html=True)
-                st.subheader('List of Dashboards with merged query')
-                dashboards_merged = grouped_dash.to_csv(index=False)
-                st.markdown(create_download_link(dashboards_merged, 'dashs-merged.csv', 'text/csv'),
-                            unsafe_allow_html=True)
-                st.dataframe(grouped_dash)
 
             if not stop_button:
                 all_looks = get_all_looks_cached()
                 all_look_ind = get_indices_by_folder(sdk, all_looks, cur_folder_id, cur_agency_folder_id)
-                all_look_titles = get_titles(all_looks, all_look_ind)
-
-                # Loop through all possible Dashboards
-                if not stop_button:
-                    found_look_list = []
-                    for cur_look in all_look_ind:
-                        try:
-                            cur_look = sdk.look(look_id=all_looks[cur_look].id)
-                            look_info = extract_look_info(cur_look, input_string)
-                            if look_info:
-                                found_look_list.append(look_info)
-                        except Exception as e:
-                            st.error(f"Error processing look {cur_look}: {e}")
-                            logging.error(f"Error processing look {cur_look}: {e}")
-
-                found_look = pd.DataFrame(found_look_list).reset_index(drop=True)
                 completed_tasks += 1
                 progress_bar.progress(completed_tasks / total_tasks)
-                st.markdown("<hr>", unsafe_allow_html=True)
-                st.subheader('List of Looks')
-                looks = found_look.to_csv(index=False)
-                st.markdown(create_download_link(looks, 'looks.csv', 'text/csv'), unsafe_allow_html=True)
+
+                # Loop through all possible looks
+                if not stop_button:
+                    found_look_dict = {}
+                    for cur_look_index in all_look_ind:
+                        try:
+                            cur_look = sdk.look(look_id=all_looks[cur_look_index].id)
+                            look_info = process_looks(cur_look, targeted_strings)
+                            if look_info:
+                                found_look_dict[str(cur_look.id)] = look_info
+                        except Exception as e:
+                            st.error(f"Error processing look {cur_look}: {e}")
+
+                found_look = pd.DataFrame(found_look_dict).T.reset_index(drop=True)
+                completed_tasks += 1
+                progress_bar.progress(completed_tasks / total_tasks)
+                st.title('Looks')
                 st.dataframe(found_look)
 
             @st.cache_data
             def get_dataframes():
+                # Always retrieve and cache the latest data frames
                 return {"found_dash": found_dash, "grouped_dash": grouped_dash, "found_look": found_look}
 
-            if input_changed:
-                get_dataframes()
-
+            # Get the updated data frames from the function
             found_dash = get_dataframes()["found_dash"]
             grouped_dash = get_dataframes()["grouped_dash"]
             found_look = get_dataframes()["found_look"]
+
+            # Update the completion and progress
             completed_tasks += 1
             progress_bar.progress(completed_tasks / total_tasks)
             st.snow()

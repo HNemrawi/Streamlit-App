@@ -1,21 +1,14 @@
-from typing import Sequence
 import numpy as np
 import pandas as pd
 from looker_sdk import sdk
-import base64
+import streamlit as st
 
-
-def get_indices_by_folder(sdk, all_items, cur_folder_id, cur_agency_folder_id):
-    """
-    Get the unique indices of items in target folders (cur_folder_id and cur_agency_folder_id).
-    """
-    target_folders = {str(cur_folder_id), str(cur_agency_folder_id)}
-    indices = [
-        idx for idx, item in enumerate(all_items)
-        if item.folder.parent_id in target_folders or item.folder.id in target_folders
-    ]
-    return np.unique(indices)
-
+def get_dashboards_by_id(sdk, dash_id: int):
+    dashboards = sdk.search_dashboards(id=dash_id)
+    if not dashboards:
+        print(f'Dashboard "{dash_id}" not found')
+        return None
+    return dashboards[0]
 
 def get_titles(items, indices):
     """
@@ -23,91 +16,118 @@ def get_titles(items, indices):
     """
     return [item.title for idx, item in enumerate(items) if idx in indices]
 
-
-def get_dashboards_by_id(sdk, dash_id: int):
-    """Get dashboards with matching id"""
-    dashboards = sdk.search_dashboards(id=dash_id)
-    if not dashboards:
-        return None
-    return dashboards[0]
-
-
-def extract_dashboard_info(dashboard, targeted_strings):
-    """
-    Extract dashboard information and tiles containing targeted strings.
-    """
-    dashboard_info = {
-        'ID': dashboard.id,
-        'Title': dashboard.title,
-        'Folder Name': dashboard.folder.name,
-        'Tiles': [tile.title for tile in dashboard.dashboard_elements if targeted_strings in str(tile)]
-    }
-    return dashboard_info
-
-
-def get_query_info(sdk, query_id, targeted_strings):
-    """
-    Get query information containing targeted strings.
-    """
-    try:
-        query = sdk.query(query_id=query_id)
-        qf_id = str(query).find(targeted_strings)
-        if qf_id > 0:
-            return query.id, str(query)[(qf_id - 10):(qf_id + 50)]
-    except Exception as e:
-        print(f"Error processing query {query_id}: {e}")
-    return None
-
-
-def process_dashboard(sdk, dashboard, targeted_strings):
-    """
-    Process dashboard elements containing merge queries with targeted strings.
-    """
-    dashboard_info = {}
-    mf_id = str(dashboard).find("merge_result_id='")
-    if mf_id >= 0:
-        for d_elems in dashboard.dashboard_elements:
-            if d_elems.merge_result_id is not None:
-                cur_mq = sdk.merge_query(merge_query_id=d_elems.merge_result_id)
-                cur_mq_list = {}
-                for cur_sq in cur_mq.source_queries:
-                    query_info = get_query_info(sdk, cur_sq.query_id, targeted_strings)
-                    if query_info:
-                        cur_mq_list[query_info[0]] = query_info[1]
-                if cur_mq_list:
-                    cur_list = {'elem_title': d_elems.title, d_elems.merge_result_id: cur_mq_list}
-                    if cur_list:
-                        dashboard_info.update({'title': dashboard.title, 'dashboard_folder_id': dashboard.folder_id,
-                                               d_elems.id: cur_list})
-    return dashboard_info
-
-
-def extract_look_info(look, targeted_strings):
+def process_looks(look, targeted_strings):
     """
     Extract look information containing targeted strings.
+    Each targeted string is checked and those found are noted.
     """
-    f_id = str(look).find(targeted_strings)
-    if f_id >= 0:
+    look_str = str(look)
+    found_strings = [ts for ts in targeted_strings if ts in look_str]
+    if found_strings:  # Only proceed if there are any found strings
         look_info = {
             'ID': look.id,
             'title': look.title,
             'look_folder_name': look.folder.name,
             'look_folder_id': look.folder_id,
+            'found_strings': found_strings  # Store the list of found strings
         }
         return look_info
     return None
 
+def get_indices_by_folder(sdk, all_items, cur_folder_ids, cur_agency_folder_ids):
+    """
+    Get indices of items whose folder ID match any of the current folder IDs or agency folder IDs
+    provided for one or more regions.
+    
+    Parameters:
+        sdk (object): An instance of the SDK to interact with.
+        all_items (list): List of all items to filter.
+        cur_folder_ids (list): List of current folder IDs across selected regions.
+        cur_agency_folder_ids (list): List of current agency folder IDs across selected regions.
 
-def create_download_link(data, filename, mime):
-    b64 = base64.b64encode(data.encode()).decode()  # some strings <-> bytes conversions necessary here
-    return f'<a href="data:{mime};base64,{b64}" download="{filename}">Download {filename}</a>'
+    Returns:
+        np.array: Unique indices of items that match the folder criteria.
+    """
+    target_folders = set(map(str, cur_folder_ids + cur_agency_folder_ids))
+    indices = [
+        idx for idx, item in enumerate(all_items)
+        if str(item.folder.parent_id) in target_folders or str(item.folder.id) in target_folders
+    ]
+    return np.unique(indices)
 
+def get_query_info(sdk, query_slug, targeted_strings):
+    """Retrieve and process query information, checking for targeted strings."""
+    try:
+        query = sdk.query_for_slug(slug=query_slug)
+        found_strings = [ts for ts in targeted_strings if ts in str(query)]
+        if found_strings:
+            qf_id = str(query).find(found_strings[0])
+            return query.id, str(query)[(qf_id - 10):(qf_id + 50)], found_strings
+    except Exception as e:
+        print(f"Error processing query with slug {query_slug}: {e}")
+    return None
 
-def process_input_string(input_string, sdk, cur_folder_id, cur_agency_folder_id, all_dashboards, all_looks):
-    # Perform data processing and return the processed data
-    pass
+def process_dashboards(sdk, dashboard, targeted_strings):
+    """Process each dashboard to find relevant queries without duplicates in tiles and found strings,
+    ensuring tiles also contain targeted strings and noting where strings are found."""
+    dashboard_info = {
+        'Dashboard ID': dashboard.id,
+        'Dashboard Title': dashboard.title,
+        'Folder Name': dashboard.folder.name,
+        'Folder ID': dashboard.folder.id,
+        'Model': None,
+        'Merged?': 'No',  # Default assumption
+        'Tiles': set(),  # Using set to avoid duplicates
+        'Found Strings': set(),
+        'Found In': set()  # To track where exactly strings are found
+    }
 
+    # Check if any targeted string is in the overall dashboard description
+    dashboard_str = str(dashboard)
+    found_in_dashboard = any(ts in dashboard_str for ts in targeted_strings)
+    if found_in_dashboard:
+        dashboard_info['Found In'].add("Dashboard Description")
 
-def display_dataframes(found_dash, grouped_dash, found_look):
-    # Display the dataframes and download links
-    pass
+    # Process for merged queries if available and each tile
+    found_in_tiles = False
+    for d_elem in dashboard.dashboard_elements:
+        element_str = str(d_elem)
+        found_in_element = any(ts in element_str for ts in targeted_strings)
+        if found_in_element:
+            dashboard_info['Found In'].add("Tile: " + d_elem.title)
+
+        if hasattr(d_elem, 'result_maker') and d_elem.result_maker and d_elem.result_maker.id:
+            dashboard_info['Model'] = d_elem.result_maker.filterables[0].model
+            if d_elem.merge_result_id:
+                dashboard_info['Merged?'] = 'Yes'
+                cur_mq = sdk.merge_query(merge_query_id=d_elem.merge_result_id)
+                for cur_sq in cur_mq.source_queries:
+                    query_info = get_query_info(sdk, cur_sq.query_slug, targeted_strings)
+                    if query_info and found_in_element:
+                        dashboard_info['Tiles'].add(d_elem.title)
+                        dashboard_info['Found Strings'].update(query_info[2])
+                        found_in_tiles = True
+                break  # Stop further checks if merged query processed
+
+    # Process non-merged tiles
+    if dashboard_info['Merged?'] == 'No':
+        for tile in dashboard.dashboard_elements:
+            tile_str = str(tile)
+            found = [s for s in targeted_strings if s in tile_str]
+            if found:
+                dashboard_info['Tiles'].add(tile.title)
+                dashboard_info['Found Strings'].update(found)
+                dashboard_info['Found In'].add("Tile: " + tile.title)
+                found_in_tiles = True
+
+    # Only include dashboard info if relevant strings were found in dashboard description or any tile
+    if not (found_in_dashboard or found_in_tiles):
+        return None
+
+    # Finalize data: convert sets to lists for output consistency
+    dashboard_info['Found Strings'] = list(dashboard_info['Found Strings'])
+    dashboard_info['Tiles'] = list(dashboard_info['Tiles'])
+    dashboard_info['Found In'] = list(dashboard_info['Found In'])
+    return dashboard_info
+
+# Example usage of this function would remain similar to previous examples.

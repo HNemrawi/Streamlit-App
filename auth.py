@@ -13,6 +13,6 @@ def show_login_page():
     if st.button("Login"):
         if check_password(password):
             st.session_state.authenticated = True
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Incorrect password. Please try again.")

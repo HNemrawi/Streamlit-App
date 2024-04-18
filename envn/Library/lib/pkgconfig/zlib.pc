@@ -1,0 +1,13 @@
+prefix=C:/string_search/envn/Library
+exec_prefix=C:/string_search/envn/Library
+libdir=C:/string_search/envn/Library/lib
+sharedlibdir=C:/string_search/envn/Library/lib
+includedir=C:/string_search/envn/Library/include
+
+Name: zlib
+Description: zlib compression library
+Version: 1.2.13
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lz
+Cflags: -I${includedir}
