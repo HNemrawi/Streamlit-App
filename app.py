@@ -7,12 +7,10 @@ from looker_utils import sdk
 st.set_page_config(page_title="Dashboard Search", page_icon=":mag_right:", layout="wide")
 
 # Functions to cache data
-@st.cache_data
 def get_all_dashboards_cached():
     return sdk.all_dashboards()
 
 
-@st.cache_data
 def get_all_looks_cached():
     return sdk.all_looks()
 
