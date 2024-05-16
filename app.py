@@ -6,15 +6,6 @@ from looker_utils import sdk
 # Set page configuration
 st.set_page_config(page_title="Dashboard Search", page_icon=":mag_right:", layout="wide")
 
-# Functions to cache data
-def get_all_dashboards_cached():
-    return sdk.all_dashboards()
-
-
-def get_all_looks_cached():
-    return sdk.all_looks()
-
-
 # Main function
 def main():
     # Sidebar content
@@ -57,7 +48,7 @@ def main():
 
             if not stop_button:
                 # Get all dashboards
-                all_dashboards = get_all_dashboards_cached()
+                all_dashboards = sdk.all_dashboards()
 
 
             if not stop_button:
@@ -91,7 +82,7 @@ def main():
                 st.dataframe(found_dash)
 
             if not stop_button:
-                all_looks = get_all_looks_cached()
+                all_looks = sdk.all_looks()
                 all_look_ind = get_indices_by_folder(sdk, all_looks, cur_folder_id, cur_agency_folder_id)
                 completed_tasks += 1
                 progress_bar.progress(completed_tasks / total_tasks)
